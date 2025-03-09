@@ -21,9 +21,8 @@
 #include <string.h>
 
 /* default parameters */
-#define DRAC_TIMEOUT_SECS	(60)
-#define DRAC_HOST               "127.0.0.1"
-
+#define DRAC_TIMEOUT_SECS   (60)
+#define DRAC_HOST           "127.0.0.1"
 
 /* libdrac function */
 int dracauth(const char *, unsigned long, char **);
@@ -32,7 +31,7 @@ int dracauth6(const char *host, const unsigned char *userip6, char **errmsg);
 const char *drac_plugin_version = DOVECOT_ABI_VERSION;
 
 static struct timeout *to_drac = NULL;
-static const char *drachost = NULL; /* dracd host */
+static const char *drachost = NULL; /* dracd host(s) */
 static struct ip_addr ip; /* remote ip address */
 static unsigned long dractout = 0; /* drac timeout secs */
 
@@ -42,17 +41,49 @@ static void drac_timeout(void *context ATTR_UNUSED)
     struct ip_addr ipv4 = ip;
 
     if (IPADDR_IS_V4(&ipv4) || (net_ipv6_mapped_ipv4_convert(&ip, &ipv4) == 0)) {
-        i_debug("drac_timeout() IP is ipv4(%s)",net_ip2addr(&ipv4));
-        if (dracauth(drachost, (unsigned long) ipv4.u.ip4.s_addr, &err) != 0) {
-            i_error("%s: dracauth() failed: %s", __FUNCTION__, err);
+        i_debug("drac_timeout() IP is ipv4(%s)", net_ip2addr(&ipv4));
+
+        bool success = false;
+        char *drachost_copy = i_strdup(drachost);
+        char *token = strtok(drachost_copy, ",");
+
+        while (token) {
+            i_debug("Trying DRAC server: %s", token);
+            if (dracauth(token, (unsigned long) ipv4.u.ip4.s_addr, &err) == 0) {
+                success = true;
+                break;
+            }
+            token = strtok(NULL, ",");
         }
-    } else if(IPADDR_IS_V6(&ip)) {
-        i_debug("drac_timeout() IP is ipv6(%s)",net_ip2addr(&ip));
-        if (dracauth6(drachost, (const unsigned char *) &ip.u.ip6.s6_addr, &err) != 0) {
-            i_error("%s: dracauth6() failed: %s", __FUNCTION__, err);
+
+        if (!success) {
+            i_error("All DRAC servers failed for IPv4: %s", err);
         }
+
+        i_free(drachost_copy);
+    } else if (IPADDR_IS_V6(&ip)) {
+        i_debug("drac_timeout() IP is ipv6(%s)", net_ip2addr(&ip));
+
+        bool success = false;
+        char *drachost_copy = i_strdup(drachost);
+        char *token = strtok(drachost_copy, ",");
+
+        while (token) {
+            i_debug("Trying DRAC server: %s", token);
+            if (dracauth6(token, (const unsigned char *) &ip.u.ip6.s6_addr, &err) == 0) {
+                success = true;
+                break;
+            }
+            token = strtok(NULL, ",");
+        }
+
+        if (!success) {
+            i_error("All DRAC servers failed for IPv6: %s", err);
+        }
+
+        i_free(drachost_copy);
     } else {
-        i_error("drac_timeout() ip adress unrecognized, canceling myself.");
+        i_error("drac_timeout() IP address unrecognized, canceling myself.");
         timeout_remove(&to_drac);
     }
 }
@@ -68,38 +99,40 @@ static void drac_mail_user_created(struct mail_user *user)
     }
 
     /* check address family */
-    if(IPADDR_IS_V4(user->conn.remote_ip) || IPADDR_IS_V6(user->conn.remote_ip)) {
-        /* get remote IP address... uum... */
+    if (IPADDR_IS_V4(user->conn.remote_ip) || IPADDR_IS_V6(user->conn.remote_ip)) {
+        /* get remote IP address */
         memcpy(&ip, user->conn.remote_ip, sizeof(ip));
 
-        /* get DRAC server name */
-        drachost = mail_user_plugin_getenv(user, "dracdserver");
-        if(drachost == NULL) {
-            drachost = DRAC_HOST;
+        /* get DRAC server(s) */
+        const char *drachost_list = mail_user_plugin_getenv(user, "dracdserver");
+        if (drachost_list == NULL) {
+            drachost_list = DRAC_HOST;
         }
+        drachost = i_strdup(drachost_list);  /* Store as a global variable */
 
         /* get timeout secs */
         dractout_str = mail_user_plugin_getenv(user, "dracdtimeout");
-        if(dractout_str == NULL) {
+        if (dractout_str == NULL) {
             dractout = DRAC_TIMEOUT_SECS;
         } else {
             dractout = strtoul(dractout_str, &ep, 10);
             /* bad format -> use default value */
-            if(ep != NULL && *ep != '\0') {
+            if (ep != NULL && *ep != '\0') {
                 i_warning("%s: bad dracdtimeout (%s). using default %d",
                           __FUNCTION__, dractout_str, DRAC_TIMEOUT_SECS);
                 dractout = DRAC_TIMEOUT_SECS;
             }
         }
-        i_debug("%s: dracdserver=%s, timeout=%ldsecs", __FUNCTION__,
-               drachost, dractout);
+
+        i_debug("%s: dracdserver(s)=%s, timeout=%ld secs", __FUNCTION__, drachost, dractout);
 
         /* connect to DRAC server */
         drac_timeout(NULL);
+
 #undef timeout_add
 #define timeout_add(msecs, callback, context) \
         timeout_add(msecs, __FILE__, __LINE__, callback, context)
-        to_drac = timeout_add(1000*dractout, drac_timeout, NULL);
+        to_drac = timeout_add(1000 * dractout, drac_timeout, NULL);
     } else {
         i_error("%s: Only IPv4 and IPv6 addresses are supported", __FUNCTION__);
     }
@@ -117,7 +150,7 @@ void drac_plugin_init(struct module *module)
 
 void drac_plugin_deinit(void)
 {
-    if(to_drac != NULL) {
+    if (to_drac != NULL) {
         timeout_remove(&to_drac);
         to_drac = NULL;
     }

@@ -1,0 +1,32 @@
+name: Build DRAC Plugin
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: fedora-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo dnf install -y gcc make dovecot-devel
+
+      - name: Find Dovecot paths
+        run: |
+          DOVDIR=$(rpm -ql dovecot-devel | grep '/include$' | sed 's|/include||' | head -n1)
+          echo "DOVDIR=$DOVDIR" >> $GITHUB_ENV
+          echo "Using Dovecot directory: $DOVDIR"
+
+      - name: Build DRAC plugin
+        run: |
+          make DOVDIR="$DOVDIR"

@@ -11,22 +11,23 @@ on:
 
 jobs:
   build:
-    runs-on: fedora-latest
+    runs-on: ubuntu-latest  # Use Ubuntu but run Fedora inside Docker
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Run Fedora container and build plugin
         run: |
-          sudo dnf install -y gcc make dovecot-devel
+          docker run --rm -v $PWD:/workspace -w /workspace fedora:latest bash -c "
+            dnf install -y gcc make dovecot-devel drac-devel &&
+            DOVDIR=\$(rpm -ql dovecot-devel | grep '/include$' | sed 's|/include||' | head -n1) &&
+            echo Using Dovecot directory: \$DOVDIR &&
+            make DOVDIR=\$DOVDIR
+          "
 
-      - name: Find Dovecot paths
-        run: |
-          DOVDIR=$(rpm -ql dovecot-devel | grep '/include$' | sed 's|/include||' | head -n1)
-          echo "DOVDIR=$DOVDIR" >> $GITHUB_ENV
-          echo "Using Dovecot directory: $DOVDIR"
-
-      - name: Build DRAC plugin
-        run: |
-          make DOVDIR="$DOVDIR"
+#      - name: Upload compiled plugin
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: drac_plugin
+#          path: drac_plugin.so
